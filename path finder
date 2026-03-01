@@ -1,0 +1,354 @@
+import pygame
+import random
+import heapq
+import math
+import time
+
+pygame.init()
+
+# ---------------- WINDOW ----------------
+GRID_WIDTH = 700
+PANEL_WIDTH = 300
+HEIGHT = 700
+WIDTH = GRID_WIDTH + PANEL_WIDTH
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("AI Pathfinding Visualizer")
+
+font = pygame.font.SysFont("Arial", 16)
+big_font = pygame.font.SysFont("Arial", 20, bold=True)
+
+clock = pygame.time.Clock()
+FPS = 60
+
+# ---------------- GRID SETTINGS ----------------
+ROWS = 25
+COLS = 25
+CELL_SIZE = GRID_WIDTH // COLS
+grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+start = None
+goal = None
+
+algorithm = "A*"
+heuristic_type = "MANHATTAN"
+dynamic_mode = False
+
+nodes_expanded = 0
+path_cost = 0
+execution_time = 0
+
+# ---------------- COLORS ----------------
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GREEN = (0, 255, 0)
+RED = (255, 0, 0)
+BLUE = (0, 120, 255)
+YELLOW = (255, 255, 0)
+ORANGE = (255, 165, 0)
+GRAY = (200, 200, 200)
+LIGHT_GRAY = (230, 230, 230)
+DARK_GRAY = (180, 180, 180)
+FLASH_RED = (255, 100, 100)
+
+# ---------------- BUTTON CLASS ----------------
+class Button:
+    def __init__(self, text, x, y, w, h, color_type="action"):
+        self.text = text
+        self.rect = pygame.Rect(x, y, w, h)
+        self.active = False
+        self.hover = False
+        self.color_type = color_type
+
+    def draw(self):
+        color = LIGHT_GRAY
+        if self.color_type == "algorithm":
+            color = (200, 255, 200)
+        elif self.color_type == "heuristic":
+            color = (200, 200, 255)
+        elif self.color_type == "action":
+            color = (255, 255, 200)
+        elif self.color_type == "dynamic":
+            color = (255, 200, 200)
+        elif self.color_type == "maze":
+            color = (200, 255, 255)
+
+        if self.active:
+            color = (100, 255, 100)
+        elif self.hover:
+            color = (180, 180, 180)
+
+        pygame.draw.rect(screen, color, self.rect)
+        pygame.draw.rect(screen, BLACK, self.rect, 2)
+        label = font.render(self.text, True, BLACK)
+        screen.blit(label, (self.rect.x + 5, self.rect.y + 5))
+
+    def clicked(self, pos):
+        return self.rect.collidepoint(pos)
+
+# ---------------- INPUT BOX CLASS ----------------
+class InputBox:
+    def __init__(self, x, y, w, h, text=''):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.color = BLACK
+        self.text = text
+        self.txt_surface = font.render(text, True, self.color)
+        self.active = False
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            self.active = self.rect.collidepoint(event.pos)
+        if event.type == pygame.KEYDOWN and self.active:
+            if event.key == pygame.K_RETURN:
+                self.active = False
+            elif event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.unicode.isdigit():
+                self.text += event.unicode
+            self.txt_surface = font.render(self.text, True, self.color)
+
+    def draw(self):
+        pygame.draw.rect(screen, WHITE, self.rect)
+        pygame.draw.rect(screen, BLACK, self.rect, 2)
+        screen.blit(self.txt_surface, (self.rect.x + 5, self.rect.y + 5))
+
+# ---------------- BUTTONS ----------------
+buttons = [
+    Button("A* Search", 720, 40, 120, 35, "algorithm"),
+    Button("GBFS", 850, 40, 120, 35, "algorithm"),
+    Button("Manhattan", 720, 85, 120, 35, "heuristic"),
+    Button("Euclidean", 850, 85, 120, 35, "heuristic"),
+    Button("Set Start", 720, 130, 120, 35, "action"),
+    Button("Set Goal", 850, 130, 120, 35, "action"),
+    Button("Run Search", 720, 175, 120, 35, "action"),
+    Button("Clear Grid", 850, 175, 120, 35, "action"),
+    Button("Toggle Dynamic", 720, 220, 120, 35, "dynamic"),
+    Button("Generate Maze", 850, 220, 120, 35, "maze"),
+    Button("Set Grid Size", 730, 310, 220, 35, "action")
+]
+
+rows_input = InputBox(730, 260, 100, 30, str(ROWS))
+cols_input = InputBox(850, 260, 100, 30, str(COLS))
+
+mode = None
+
+# ---------------- HEURISTIC ----------------
+def heuristic(a, b):
+    if heuristic_type == "MANHATTAN":
+        return abs(a[0]-b[0]) + abs(a[1]-b[1])
+    else:
+        return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+
+# ---------------- SEARCH ----------------
+def search(start, goal):
+    global nodes_expanded, path_cost, execution_time
+    start_time = time.time()
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+    visited = set()
+    frontier = set([start])
+    nodes_expanded = 0
+
+    while open_set:
+        current = heapq.heappop(open_set)[1]
+        if current in visited:
+            continue
+        visited.add(current)
+        frontier.discard(current)
+        nodes_expanded += 1
+
+        # ---------------- SAFE DYNAMIC MODE ----------------
+        if dynamic_mode:
+            empty_cells = [(r, c) for r in range(ROWS) for c in range(COLS)
+                           if grid[r][c] == 0 and (r, c) != start and (r, c) != goal]
+            if empty_cells and random.random() < 0.15:
+                r, c = random.choice(empty_cells)
+                grid[r][c] = 1
+                pygame.draw.rect(screen, FLASH_RED, (c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE))
+                pygame.display.update()
+
+        draw(path=list(came_from.keys()), visited=visited, frontier=frontier)
+        pygame.time.delay(15)
+
+        if current == goal:
+            path = []
+            while current in came_from:
+                path.append(current)
+                current = came_from[current]
+            path.reverse()
+            for node in path:
+                draw(path=[node], visited=visited, frontier=frontier)
+                pygame.time.delay(20)
+            path_cost = len(path)
+            execution_time = (time.time() - start_time) * 1000
+            return path, visited, frontier
+
+        r, c = current
+        for dr, dc in [(0,1),(1,0),(0,-1),(-1,0)]:
+            nr, nc = r+dr, c+dc
+            if 0 <= nr < ROWS and 0 <= nc < COLS:
+                if grid[nr][nc] == 1:
+                    continue
+                neighbor = (nr, nc)
+                if neighbor in visited:
+                    continue
+                if algorithm == "A*":
+                    temp_g = g_score[current] + 1
+                    if neighbor not in g_score or temp_g < g_score[neighbor]:
+                        came_from[neighbor] = current
+                        g_score[neighbor] = temp_g
+                        f = temp_g + heuristic(neighbor, goal)
+                        heapq.heappush(open_set, (f, neighbor))
+                        frontier.add(neighbor)
+                else:
+                    if neighbor not in came_from:
+                        came_from[neighbor] = current
+                        h = heuristic(neighbor, goal)
+                        heapq.heappush(open_set, (h, neighbor))
+                        frontier.add(neighbor)
+
+    execution_time = (time.time() - start_time) * 1000
+    return None, visited, frontier
+
+# ---------------- MAZE GENERATOR ----------------
+def generate_maze(density=0.3):
+    global grid
+    for r in range(ROWS):
+        for c in range(COLS):
+            if (start and (r,c) == start) or (goal and (r,c) == goal):
+                grid[r][c] = 0
+            else:
+                grid[r][c] = 1 if random.random() < density else 0
+
+# ---------------- SET GRID SIZE ----------------
+def set_grid_size():
+    global ROWS, COLS, CELL_SIZE, grid, start, goal, path, visited, frontier
+    if rows_input.text and cols_input.text:
+        ROWS = max(5, min(50, int(rows_input.text)))
+        COLS = max(5, min(50, int(cols_input.text)))
+        CELL_SIZE = GRID_WIDTH // COLS
+        grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+        start = None
+        goal = None
+        path = []
+        visited = set()
+        frontier = set()
+
+# ---------------- DRAW ----------------
+def draw(path=[], visited=set(), frontier=set()):
+    screen.fill(WHITE)
+    for r in range(ROWS):
+        for c in range(COLS):
+            rect = pygame.Rect(c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE)
+            if grid[r][c] == 1:
+                pygame.draw.rect(screen, BLACK, rect)
+            if (r,c) in visited:
+                shade = min(255, 120 + int(135 * (len(visited)/(ROWS*COLS))))
+                pygame.draw.rect(screen, (0, 0, shade), rect)
+            if (r,c) in frontier:
+                pygame.draw.rect(screen, ORANGE, rect, 2)
+            if (r,c) in path:
+                pygame.draw.rect(screen, GREEN, rect)
+            if start == (r,c):
+                pygame.draw.rect(screen, (0,200,0), rect)
+            if goal == (r,c):
+                pygame.draw.rect(screen, RED, rect)
+            pygame.draw.rect(screen, GRAY, rect, 1)
+
+    pygame.draw.rect(screen, (245,245,245), (GRID_WIDTH, 0, PANEL_WIDTH, HEIGHT))
+    title = big_font.render("Control Panel", True, BLACK)
+    screen.blit(title, (750, 10))
+
+    mouse_pos = pygame.mouse.get_pos()
+    for b in buttons:
+        b.hover = b.rect.collidepoint(mouse_pos)
+        b.draw()
+
+    rows_input.draw()
+    cols_input.draw()
+    screen.blit(font.render("Rows:", True, BLACK), (700, 265))
+    screen.blit(font.render("Cols:", True, BLACK), (820, 265))
+
+    metrics_y = 580
+    screen.blit(font.render("Metrics:", True, BLACK), (720, metrics_y))
+    screen.blit(font.render(f"Nodes Visited: {nodes_expanded}", True, BLACK), (720, metrics_y+25))
+    screen.blit(font.render(f"Path Cost: {path_cost}", True, BLACK), (720, metrics_y+50))
+    screen.blit(font.render(f"Time: {round(execution_time,2)} ms", True, BLACK), (720, metrics_y+75))
+
+    pygame.display.update()
+
+# ---------------- MAIN LOOP ----------------
+running = True
+path = []
+visited = set()
+frontier = set()
+
+while running:
+    clock.tick(FPS)
+    draw(path, visited, frontier)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+        # Handle input boxes first
+        rows_input.handle_event(event)
+        cols_input.handle_event(event)
+
+        # Only allow clicks if no input box is active
+        if not rows_input.active and not cols_input.active:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                pos = pygame.mouse.get_pos()
+
+                # Grid click
+                if pos[0] < GRID_WIDTH:
+                    r = pos[1] // CELL_SIZE
+                    c = pos[0] // CELL_SIZE
+                    if mode == "START":
+                        start = (r,c)
+                        grid[r][c] = 0
+                        mode = None
+                    elif mode == "GOAL":
+                        goal = (r,c)
+                        grid[r][c] = 0
+                        mode = None
+                    else:
+                        grid[r][c] = 1
+
+                # Button clicks
+                for i, b in enumerate(buttons):
+                    if b.clicked(pos):
+                        for btn in buttons:
+                            if btn.text != "Toggle Dynamic":
+                                btn.active = False
+                        if i == 8:  # Toggle Dynamic
+                            dynamic_mode = not dynamic_mode
+                            b.active = dynamic_mode
+                        else:
+                            b.active = True
+
+                        if i == 0: algorithm = "A*"
+                        if i == 1: algorithm = "GBFS"
+                        if i == 2: heuristic_type = "MANHATTAN"
+                        if i == 3: heuristic_type = "EUCLIDEAN"
+                        if i == 4: mode = "START"
+                        if i == 5: mode = "GOAL"
+                        if i == 6 and start and goal:
+                            path, visited, frontier = search(start, goal)
+                        if i == 7:
+                            grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+                            start = None
+                            goal = None
+                            path = []
+                            visited = set()
+                            frontier = set()
+                        if i == 9:
+                            generate_maze(density=0.3)
+                            path = []
+                            visited = set()
+                            frontier = set()
+                        if i == 10:
+                            set_grid_size()
+
+pygame.quit()
